@@ -1,5 +1,4 @@
 # **Pairs-Trading Strategy (PTS)**
-
 Identifies two historically correlated assets and generates trading signals using technical analysis to profit from mean-reversion. 
 
 ## What is Pairs Trading? 
