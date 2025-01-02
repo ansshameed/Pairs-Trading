@@ -170,3 +170,13 @@ def adf_test(price_data, symbols):
     else:
         print("The spread is not stationary (p-value >= 0.05).")
         return False
+
+def calculate_indicators(spread, window=20): 
+
+    #spread[]: adding new columns to Spreads dataframe (indicator information for each day along)
+    #Bollinger Bands - SMA and upper/lower bands. 
+    #1st param = numeric series (spread data of closing prices) and window param (period over which MA and STD calculated)
+    #Upper and Lower band updates begin on day 20 to allow enough data for the window
+    bollinger = BollingerBands(spread['Spread'], window=window) #20 day Bollinger Band.
+    spread['BB_upper'] = bollinger.bollinger_hband() #upper band 
+    spread['BB_lower'] = bollinger.bollinger_lband() #lower band 
