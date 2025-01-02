@@ -152,3 +152,21 @@ def test_cointegration(price_data, symbols):
     else:
         print(f"{symbols[0]} and {symbols[1]} are not cointegrated (p-value >= 0.05).")
         return False
+
+#Augmented Dickey-Fuller (ADF) test on individual time series
+def adf_test(price_data, symbols):
+    print("\nADF Test Results:")
+    
+    #Test stationarity of the spread (linear combination of time series) 
+    spread = price_data[symbols[0]] - price_data[symbols[1]]
+    adf_stat, p_value, _, _, critical_values, _ = adfuller(spread) #adf test on spread
+    #print("\nADF Test for Spread:")
+    #print(f" ADF Statistic: {adf_stat}")
+    print(f"p-value: {p_value}")
+    #print(f" Critical Values: {critical_values}")
+    if p_value < 0.05:
+        print("The spread is stationary (p-value < 0.05).")
+        return True
+    else:
+        print("The spread is not stationary (p-value >= 0.05).")
+        return False
