@@ -1,5 +1,8 @@
 # **Pairs-Trading Strategy (PTS)**
 
+Identifies two historically correlated assets and generates trading signals using technical analysis to profit from mean-reversion. 
+
+## What is Pairs Trading? 
 - Pairs Trading is a **market-neutral strategy** to identify two historically correlated assets
 - Takes **long position in underperforming asset** and **short position in outperforming asset** when price relationship diverges
 - Profits made when **prices revert to mean**
