@@ -179,4 +179,15 @@ def calculate_indicators(spread, window=20):
     #Upper and Lower band updates begin on day 20 to allow enough data for the window
     bollinger = BollingerBands(spread['Spread'], window=window) #20 day Bollinger Band.
     spread['BB_upper'] = bollinger.bollinger_hband() #upper band 
-    spread['BB_lower'] = bollinger.bollinger_lband() #lower band 
+    spread['BB_lower'] = bollinger.bollinger_lband() #lower band
+
+    #RSI - Measuring speed + magnitude; oversold = below 30, overbought = above 70
+    #RSI calculations begin on day 14 for sufficient data for window 
+    spread['RSI'] = RSIIndicator(spread['Spread'], window=14).rsi() #14 day RSI
+
+    #Z-SCORE - measuring extreme deviations from the mean
+    #Current spread - rolling window mean of Spread. Divided by rolling window STD of Spread. 
+    spread['Z_Score'] = (spread['Spread'] - spread['Spread'].rolling(window).mean()) / spread['Spread'].rolling(window).std()
+
+    #returning Spread Dataframe with new columns
+    return spread
