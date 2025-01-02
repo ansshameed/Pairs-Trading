@@ -14,6 +14,8 @@
 - **Data Acquisition**:
   - `yfinance` to fetch historical data for backtesting. 
   - Backtesting used for both identifying 'pairs' of assets and for strategy testing
+  - `backtest_data_diff.csv`: Daily data (12/2019-12/2024) of daily asset spread
+  - `backtest_data.csv`: Daily data (12/2000 - 12/2024) of daily asset prices (to identify valid pair)
 - **Pairs Validation**: Verifying two assets are a **pair**
   - **Cointegration Test**: Validates long-term equilibrium (p-value < 0.05)
   - **Stationarity Test**: Confirms mean-reverting spread using **ADF** (Augmented Dickey-Fuller) test (p-value < 0.05)
