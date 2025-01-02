@@ -253,3 +253,74 @@ def calculate_metrics(portfolio, returns, initial_balance):
         "Final Portfolio Value": portfolio[-1]
     }
 
+
+# Main execution
+#Tickers and Backtest Range 
+symbols = ['PEP', 'KO'] #BofA and WFC
+start_date = '2000-12-26' #Backtest dates; long for bigger sample size for cointegration
+end_date = '2024-12-24' 
+
+price_data = fetch_data(symbols, start_date, end_date)
+if price_data is not None:
+    cointegrated = test_cointegration(price_data, symbols)
+    spread_stationarity = adf_test(price_data, symbols)
+
+    #Check if stocks are valid pair (adf stationarity and cointegration tests)
+    if cointegrated and spread_stationarity: 
+        print(f"\nThe symbols {symbols[0]} and {symbols[1]} are a valid pair for pairs trading.")
+
+        #Calculate Spread and Indicators 
+        spread = pd.DataFrame({'Spread': price_data['PEP'] - price_data['KO']}) #makes new dataframe for spread data
+        print(spread.tail()) #check spread is being created with last few rows 
+        spread = calculate_indicators(spread) #calculate indicators + signals on spread. Updated spread dataframe
+
+        #Subset data for strategy backtest; shorter time to exploit mean reversion
+        backtest_start_date = '2019-01-01'
+        backtest_spread = spread.loc[backtest_start_date:] #subset spread for backtest data (from updated backtest start date)
+        backtest_prices = price_data[backtest_start_date:] #only gets stock price data from the new backtest start date
+
+        #Run backtest
+        portfolio, returns = backtest_pairs(backtest_prices['PEP'], backtest_prices['KO'], backtest_spread)
+
+        #Calculate Metrics 
+        metrics = calculate_metrics(portfolio, returns, initial_balance=10000)
+        print("\nPerformance Metrics: ")
+        #Loop metrics dictionary (Key: Metric (e.g. Sharpe Ratio), Value)
+        for metric, value in metrics.items(): 
+            print(f"{metric}: {value:.2f}")
+
+        # Plot Spread with Bollinger Bands
+        plt.figure(figsize=(10, 6))
+        plt.plot(backtest_spread.index, backtest_spread['Spread'], label='Spread')
+        plt.plot(backtest_spread.index, backtest_spread['BB_upper'], label='BB Upper')
+        plt.plot(backtest_spread.index, backtest_spread['BB_lower'], label='BB Lower')
+        plt.fill_between(backtest_spread.index, backtest_spread['BB_upper'], backtest_spread['BB_lower'], color='gray', alpha=0.2, label='Bollinger Bands')
+        plt.title('Spread with Bollinger Bands')
+        plt.xlabel('Date')
+        plt.ylabel('Spread')
+        plt.legend()
+        plt.show()
+
+        #Individual Time Series PLot 
+        plt.figure(figsize=(10,5)) 
+        #x = timestamps 
+        #y = price plot
+        plt.plot(backtest_prices.index, backtest_prices['PEP'], label='PEP') #index = dates (timestamps) for rows in price_data
+        plt.plot(backtest_prices.index, backtest_prices['KO'], label='KO')
+        plt.title('Price Time Series of PEP and KO') 
+        plt.xlabel('Date') 
+        plt.ylabel('Price')
+        plt.legend()
+        plt.show() 
+
+        #Plot porfolio value
+        plt.figure(figsize=(10, 6))
+        plt.plot(backtest_spread.index, portfolio, label='Portfolio Value')
+        plt.title('Pairs Trading Portfolio Value')
+        plt.xlabel('Time')
+        plt.ylabel('Portfolio Value')
+        plt.legend()
+        plt.show() 
+
+    else: 
+        print(f"\nThe symbols {symbols[0]} and {symbols[1]} are not a valid pair for pairs trading.")
