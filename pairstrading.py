@@ -241,3 +241,15 @@ def backtest_pairs(stock1, stock2, spread, initial_balance=10000):
     
     #daily portfolio value and daily returns
     return portfolio, returns
+
+def calculate_metrics(portfolio, returns, initial_balance):
+    total_return = (portfolio[-1] - initial_balance) / initial_balance
+    sharpe_ratio = np.mean(returns) / np.std(returns) * np.sqrt(252)
+    max_drawdown = max(1 - (np.array(portfolio) / np.maximum.accumulate(portfolio)))
+    return { 
+        "Total Return": total_return, 
+        "Sharpe Ratio": sharpe_ratio, 
+        "Max Drawdown": max_drawdown, 
+        "Final Portfolio Value": portfolio[-1]
+    }
+
