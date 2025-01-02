@@ -191,3 +191,53 @@ def calculate_indicators(spread, window=20):
 
     #returning Spread Dataframe with new columns
     return spread
+
+def backtest_pairs(stock1, stock2, spread, initial_balance=10000):
+    capital = initial_balance
+    #keys = 'long' and 'short'; types of positions
+    #value: initial value for both keys, quantity of assets held in each position type. Updates as strategy executes trades
+    positions = {'long': 0, 'short': 0} #dictionary; total number of shares holding for PEP and KO
+    portfolio = [] 
+    returns = [] 
+
+    #loop through rows of spread (each daily timestamp). Calculations everyday to check buy/sell signals
+    #iloc = pd method to access rows/columns of DataFrame by integer-based index positons
+    for i in range(len(spread)):
+
+        #Buy Signal: Spread bellow BB Lower and RSI < 30 and no of long positions = 0
+        #Long positions = 0: buy signal is only triggered if no longs held currently, preventing strat from opening multiple long positons simulataneously; over-leveraging the portfolio
+        #Can't open up another long pos (buy) until current position is fully closed 
+        #Program assumes we can only have one set of long positions and sell positions
+        #Only one active pair of positions at a time. Avoiding overlapping trades  
+        #Assumes all capital allocated once we do buy signal (used all our capital when buy signal triggered)
+        #Z-Score < -2: Spread is quite below mean (more than 2 SD's below mean)
+        if spread['Spread'].iloc[i] < spread['BB_lower'].iloc[i] and spread['RSI'].iloc[i] < 30 and spread['Z_Score'].iloc[i] < -2 and positions['long'] == 0:
+            #stock.iloc[i] = current day close price of stock from dataframe
+            #how many shares we can go long and short on current day close price 
+            positions['long'] = capital / stock1.iloc[i] #how many of the first stock can we buy with available capital at current price (stock1.iloc[i]) e.g. 10 long positions is 10 shares of the stock bought
+            positions['short'] = capital / stock2.iloc[i] #how many of the second stock shorting
+            capital = 0 #assumes all available capital is fully allocated to long and short positions during each buy signal
+            
+        #Sell Signal: Spread above BB Upper and RSI > 70 and atleast 1 long position
+        #Long Position > 0: need atleast 1 long position to initiate sell signal to ensure strat has existing position to close or reduce when sell criteria is met 
+        #Sell signal closes current long and short positions before allowing new trades
+        #Sell the curent shares of stock 1 at current price (gain capital) and 'buying back' short position shares of stock 2 (subtracts from capital) 
+        #After closing positions, dict is reset. Ensures no active positions remian and capital fully liquidated for new trades
+        #Therefore sells long and buys back short when sell signal triggered, and resets the positions once it sells everything
+        #Z-Score > 2: Spread is quite above mean (more than 2 SD's above mean)
+        elif spread['Spread'].iloc[i] > spread['BB_upper'].iloc[i] and spread['RSI'].iloc[i] > 70 and spread['Z_Score'].iloc[i] > 2 and positions['long'] > 0:
+            capital = positions['long'] * stock1.iloc[i] - positions['short'] * stock2.iloc[i]
+            position = {'long': 0, 'short': 0} 
+
+        #Track portfolio value 
+        current_portfolio_value = capital + positions['long'] * stock1.iloc[i] - positions['short'] * stock2.iloc[i] 
+        portfolio.append(current_portfolio_value) #portfolio update appended everyday 
+        if portfolio[i - 1] != 0: #if this is past day 1
+            #Everyday returns 
+            #(today's portfolio value - yesterday portfolio value) / yesterdays portfolio value; % change between yesterday and today; daily return
+            returns.append( (current_portfolio_value - portfolio[i - 1]) / portfolio[i - 1])
+        else:
+            returns.append(0) #no returns if the previous day's portfolio is 0
+    
+    #daily portfolio value and daily returns
+    return portfolio, returns
