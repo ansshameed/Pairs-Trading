@@ -101,3 +101,31 @@ Maximum Drawdown Metrics:
 - Division calcilates portfolio's value as fraction of its highest value up to that point (current peak). 
 - Calculates max drawdown of everyday and finds maximum 
 '''
+
+def fetch_data(symbols, start_date, end_date): 
+    #Fetch data for symbols
+    data = {} #Stores data as dictionary
+    for symbol in symbols: #loops through symbols in symbols list
+        df = yf.download(symbol, start=start_date, end=end_date) #downloads data for symbol (start to end date)
+        if not df.empty: #check if data is valid; data exists
+            data[symbol] = df['Close'] #get daily close prices
+        else: 
+            print(f"Failed to download data for {symbol}") 
+
+    #Combine data into single DataFrame 
+    if data: 
+        price_data = pd.concat(data, axis=1) #aligns data by index (dates)
+        price_data.columns = symbols #rename columns to stock symbols
+
+        #Log transformation - not sure if needed? 
+        price_data = np.log(price_data) 
+        print(price_data.tail())
+        
+        #Save data to CSV file 
+        price_data.to_csv("backtest_data.csv") 
+        print("Data saved to backtest_data.csv")
+        return price_data
+
+    else: 
+        print("No valid data fetched.")
+        return None
