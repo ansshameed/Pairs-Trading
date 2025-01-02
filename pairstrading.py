@@ -129,3 +129,26 @@ def fetch_data(symbols, start_date, end_date):
     else: 
         print("No valid data fetched.")
         return None
+
+#Check if the two stocks time series (stock prices) have cointegrated relationship 
+#Means their linear combination (spread) is stationary; stationary spread implies deviations form the mean are temporary and revert overtime
+def test_cointegration(price_data, symbols):
+    print("\nCointegration Test Results:")
+    # Extract price series
+    stock1 = price_data[symbols[0]]
+    stock2 = price_data[symbols[1]]
+
+    # Perform cointegration test
+    t_stat, p_value, critical_values = coint(stock1, stock2)
+    #print(f"Cointegration test results for {symbols[0]} and {symbols[1]}:")
+    #print(f"t-statistic: {t_stat}")
+    print(f"p-value: {p_value}")
+    #print(f"Critical Values: {critical_values}")
+
+    # Interpret results
+    if p_value < 0.05:
+        print(f"{symbols[0]} and {symbols[1]} are cointegrated (p-value < 0.05).")
+        return True
+    else:
+        print(f"{symbols[0]} and {symbols[1]} are not cointegrated (p-value >= 0.05).")
+        return False
