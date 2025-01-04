@@ -6,6 +6,242 @@ from ta.volatility import BollingerBands
 import matplotlib.pyplot as plt
 from statsmodels.tsa.stattools import coint, adfuller
 
+def fetch_data(symbols, start_date, end_date): 
+    #Fetch data for symbols
+    data = {} #Stores data as dictionary
+    for symbol in symbols: #loops through symbols in symbols list
+        df = yf.download(symbol, start=start_date, end=end_date) #downloads data for symbol (start to end date)
+        if not df.empty: #check if data is valid; data exists
+            data[symbol] = df['Close'] #get daily close prices
+        else: 
+            print(f"Failed to download data for {symbol}") 
+
+    #Combine data into single DataFrame 
+    if data: 
+        price_data = pd.concat(data, axis=1) #aligns data by index (dates)
+        price_data.columns = symbols #rename columns to stock symbols
+
+        #Log transformation - not sure if needed? 
+        price_data = np.log(price_data) 
+        print(price_data.tail())
+        
+        #Save data to CSV file 
+        price_data.to_csv("backtest_data.csv") 
+        print("Data saved to backtest_data.csv")
+        return price_data
+
+    else: 
+        print("No valid data fetched.")
+        return None
+
+#Check if the two stocks time series (stock prices) have cointegrated relationship 
+#Means their linear combination (spread) is stationary; stationary spread implies deviations form the mean are temporary and revert overtime
+def test_cointegration(price_data, symbols):
+    print("\nCointegration Test Results:")
+    # Extract price series
+    stock1 = price_data[symbols[0]]
+    stock2 = price_data[symbols[1]]
+
+    # Perform cointegration test
+    t_stat, p_value, critical_values = coint(stock1, stock2)
+    #print(f"Cointegration test results for {symbols[0]} and {symbols[1]}:")
+    #print(f"t-statistic: {t_stat}")
+    print(f"p-value: {p_value}")
+    #print(f"Critical Values: {critical_values}")
+
+    # Interpret results
+    if p_value < 0.05:
+        print(f"{symbols[0]} and {symbols[1]} are cointegrated (p-value < 0.05).")
+        return True
+    else:
+        print(f"{symbols[0]} and {symbols[1]} are not cointegrated (p-value >= 0.05).")
+        return False
+
+#Augmented Dickey-Fuller (ADF) test on individual time series
+def adf_test(price_data, symbols):
+    print("\nADF Test Results:")
+    
+    #Test stationarity of the spread (linear combination of time series) 
+    spread = price_data[symbols[0]] - price_data[symbols[1]]
+    adf_stat, p_value, _, _, critical_values, _ = adfuller(spread) #adf test on spread
+    #print("\nADF Test for Spread:")
+    #print(f" ADF Statistic: {adf_stat}")
+    print(f"p-value: {p_value}")
+    #print(f" Critical Values: {critical_values}")
+    if p_value < 0.05:
+        print("The spread is stationary (p-value < 0.05).")
+        return True
+    else:
+        print("The spread is not stationary (p-value >= 0.05).")
+        return False
+
+def calculate_indicators(spread, window=20): 
+
+    #Bollinger Bands - SMA and upper/lower bands. 
+    bollinger = BollingerBands(spread['Spread'], window=window) #20 day Bollinger Band.
+    spread['BB_upper'] = bollinger.bollinger_hband() #upper band 
+    spread['BB_lower'] = bollinger.bollinger_lband() #lower band
+
+    #RSI - Measuring speed + magnitude; oversold = below 30, overbought = above 70
+    spread['RSI'] = RSIIndicator(spread['Spread'], window=14).rsi() #14 day RSI
+
+    #Z-SCORE - measuring extreme deviations from the mean
+    #Current spread - rolling window mean of Spread. Divided by rolling window STD of Spread. 
+    spread['Z_Score'] = (spread['Spread'] - spread['Spread'].rolling(window).mean()) / spread['Spread'].rolling(window).std()
+
+    spread.dropna(inplace=True) #Drop rows with NaN values after all rolling calculations are complete
+
+    #returning Spread Dataframe with new columns
+    return spread
+
+def backtest_pairs(stock1, stock2, spread, initial_balance=10000, transaction_cost=0.001):
+    capital = initial_balance
+    #keys = 'long' and 'short'; types of positions
+    #value: initial value for both keys, quantity of assets held in each position type. Updates as strategy executes trades
+    positions = {'long': 0, 'short': 0} #dictionary; total number of shares holding for PEP and KO
+    portfolio = [] 
+    returns = []
+    initial_stop_loss = 0.8 * initial_balance
+    initial_take_profit = 1.3 * initial_balance
+    stop_loss = initial_stop_loss
+    take_profit = initial_take_profit
+
+    #loop through rows of spread (each daily timestamp). Calculations everyday to check buy/sell signals
+    #iloc = pd method to access rows/columns of DataFrame by integer-based index positons
+    for i in range(len(spread)):
+
+        #current_portfolio_value = capital + 
+
+        #Buy Signal
+        if spread['Spread'].iloc[i] < spread['BB_lower'].iloc[i] and spread['RSI'].iloc[i] < 30 and spread['Z_Score'].iloc[i] < -2 and positions['long'] == 0:
+            #stock.iloc[i] = current day close price of stock from dataframe
+            #how many shares we can go long and short on current day close price
+            #position_size = capital * abs(spread['Z_Score'].iloc[i]) / max(abs(spread['Z_Score']))
+            #position_size = capital * 0.2
+            position_size = min(capital * 0.2, capital * abs(spread['Z_Score'].iloc[i]) / max(abs(spread['Z_Score'])))
+            positions['long'] = position_size / stock1.iloc[i] #how many of the first stock can we buy with available capital at current price (stock1.iloc[i]) e.g. 10 long positions is 10 shares of the stock bought
+            positions['short'] = position_size / stock2.iloc[i] #how many of the second stock shorting
+            initial_short_price = stock2.iloc[i]
+            capital -= transaction_cost * (positions['long'] * stock1.iloc[i] + positions['short'] * stock2.iloc[i])
+        
+        #Sell Signal
+        elif spread['Spread'].iloc[i] > spread['BB_upper'].iloc[i] and spread['RSI'].iloc[i] > 70 and spread['Z_Score'].iloc[i] > -0.5 and positions['long'] > 0:
+            capital += positions['long'] * stock1.iloc[i] + (initial_short_price - stock2.iloc[i]) * positions['short'] - transaction_cost * positions['long'] * stock1.iloc[i]
+            positions = {'long': 0, 'short': 0}
+            initial_short_price = None
+
+        #Track portfolio value 
+        current_portfolio_value = capital + positions['long'] * stock1.iloc[i] - positions['short'] * stock2.iloc[i] 
+        portfolio.append(current_portfolio_value) #portfolio update appended everyday
+
+        stop_loss = 0.8 * current_portfolio_value
+        take_profit = 1.3 * current_portfolio_value
+
+        if current_portfolio_value <= stop_loss or current_portfolio_value >= take_profit:
+            capital += positions['long'] * stock1.iloc[i] - positions['short'] * stock2.iloc[i]
+            positions = {'long': 0, 'short': 0}
+            print("Stop-loss or take-profit triggered. Exiting...")
+            break
+
+        if i > 0 and portfolio[i - 1] != 0: #if this is past day 1
+            #Everyday returns 
+            #(today's portfolio value - yesterday portfolio value) / yesterdays portfolio value; % change between yesterday and today; daily return
+            returns.append((current_portfolio_value - portfolio[i - 1]) / portfolio[i - 1])
+            #print(returns)
+        else:
+            returns.append(0) #no returns if the previous day's portfolio is 0
+        
+        print(f"Day {i}, Capital: {capital}, Long: {positions['long']}, Short: {positions['short']}")
+
+    
+    #daily portfolio value and daily returns
+    return portfolio, returns
+
+def calculate_metrics(portfolio, returns, initial_balance):
+    total_return = (portfolio[-1] - initial_balance) / initial_balance
+    risk_free_rate = 0.01
+    sharpe_ratio = 0 if np.std(returns) == 0 else (np.mean(returns) * 252 - risk_free_rate) / (np.std(returns) * np.sqrt(252))
+    max_drawdown = max(1 - (np.array(portfolio) / np.maximum.accumulate(portfolio)))
+    return { 
+        "Total Return": total_return, 
+        "Sharpe Ratio": sharpe_ratio, 
+        "Max Drawdown": max_drawdown, 
+        "Final Portfolio Value": portfolio[-1]
+    }
+
+
+# Main execution
+#Tickers and Backtest Range 
+symbols = ['PEP', 'KO'] #BofA and WFC
+start_date = '2000-12-26' #Backtest dates; long for bigger sample size for cointegration
+end_date = '2024-12-24' 
+
+price_data = fetch_data(symbols, start_date, end_date)
+if price_data is not None:
+    cointegrated = test_cointegration(price_data, symbols)
+    spread_stationarity = adf_test(price_data, symbols)
+
+    #Check if stocks are valid pair (adf stationarity and cointegration tests)
+    if cointegrated and spread_stationarity: 
+        print(f"\nThe symbols {symbols[0]} and {symbols[1]} are a valid pair for pairs trading.")
+
+        #Calculate Spread and Indicators 
+        spread = pd.DataFrame({'Spread': price_data['PEP'] - price_data['KO']}) #makes new dataframe for spread data
+        print(spread.tail()) #check spread is being created with last few rows 
+        spread = calculate_indicators(spread) #calculate indicators + signals on spread. Updated spread dataframe
+
+        #Subset data for strategy backtest; shorter time to exploit mean reversion
+        backtest_start_date = '2020-01-01'
+        backtest_spread = spread.loc[backtest_start_date:] #subset spread for backtest data (from updated backtest start date)
+        backtest_prices = price_data[backtest_start_date:] #only gets stock price data from the new backtest start date
+
+        #Run backtest
+        portfolio, returns = backtest_pairs(backtest_prices['PEP'], backtest_prices['KO'], backtest_spread)
+
+        #Calculate Metrics 
+        metrics = calculate_metrics(portfolio, returns, initial_balance=10000)
+        print("\nPerformance Metrics: ")
+        #Loop metrics dictionary (Key: Metric (e.g. Sharpe Ratio), Value)
+        for metric, value in metrics.items(): 
+            print(f"{metric}: {value:.2f}")
+
+        # Plot Spread with Bollinger Bands
+        plt.figure(figsize=(10, 6))
+        plt.plot(backtest_spread.index, backtest_spread['Spread'], label='Spread')
+        plt.plot(backtest_spread.index, backtest_spread['BB_upper'], label='BB Upper')
+        plt.plot(backtest_spread.index, backtest_spread['BB_lower'], label='BB Lower')
+        plt.fill_between(backtest_spread.index, backtest_spread['BB_upper'], backtest_spread['BB_lower'], color='gray', alpha=0.2, label='Bollinger Bands')
+        plt.title('Spread with Bollinger Bands')
+        plt.xlabel('Date')
+        plt.ylabel('Spread')
+        plt.legend()
+        plt.show()
+
+        #Individual Time Series PLot 
+        plt.figure(figsize=(10,5)) 
+        #x = timestamps 
+        #y = price plot
+        plt.plot(backtest_prices.index, backtest_prices['PEP'], label='PEP') #index = dates (timestamps) for rows in price_data
+        plt.plot(backtest_prices.index, backtest_prices['KO'], label='KO')
+        plt.title('Price Time Series of PEP and KO') 
+        plt.xlabel('Date') 
+        plt.ylabel('Price')
+        plt.legend()
+        plt.show() 
+
+        #Plot porfolio value
+        plt.figure(figsize=(10, 6))
+        plt.plot(backtest_spread.index[:len(portfolio)], portfolio, label='Portfolio Value')
+        plt.title('Pairs Trading Portfolio Value')
+        plt.xlabel('Time')
+        plt.ylabel('Portfolio Value')
+        plt.legend()
+        plt.show()
+
+    else: 
+        print(f"\nThe symbols {symbols[0]} and {symbols[1]} are not a valid pair for pairs trading.")
+
+
 '''NOTES 
 
 - Pair = When difference between the two assets mean revert or are cointegrated. Criteria: 
@@ -101,226 +337,3 @@ Maximum Drawdown Metrics:
 - Division calcilates portfolio's value as fraction of its highest value up to that point (current peak). 
 - Calculates max drawdown of everyday and finds maximum 
 '''
-
-def fetch_data(symbols, start_date, end_date): 
-    #Fetch data for symbols
-    data = {} #Stores data as dictionary
-    for symbol in symbols: #loops through symbols in symbols list
-        df = yf.download(symbol, start=start_date, end=end_date) #downloads data for symbol (start to end date)
-        if not df.empty: #check if data is valid; data exists
-            data[symbol] = df['Close'] #get daily close prices
-        else: 
-            print(f"Failed to download data for {symbol}") 
-
-    #Combine data into single DataFrame 
-    if data: 
-        price_data = pd.concat(data, axis=1) #aligns data by index (dates)
-        price_data.columns = symbols #rename columns to stock symbols
-
-        #Log transformation - not sure if needed? 
-        price_data = np.log(price_data) 
-        print(price_data.tail())
-        
-        #Save data to CSV file 
-        price_data.to_csv("backtest_data.csv") 
-        print("Data saved to backtest_data.csv")
-        return price_data
-
-    else: 
-        print("No valid data fetched.")
-        return None
-
-#Check if the two stocks time series (stock prices) have cointegrated relationship 
-#Means their linear combination (spread) is stationary; stationary spread implies deviations form the mean are temporary and revert overtime
-def test_cointegration(price_data, symbols):
-    print("\nCointegration Test Results:")
-    # Extract price series
-    stock1 = price_data[symbols[0]]
-    stock2 = price_data[symbols[1]]
-
-    # Perform cointegration test
-    t_stat, p_value, critical_values = coint(stock1, stock2)
-    #print(f"Cointegration test results for {symbols[0]} and {symbols[1]}:")
-    #print(f"t-statistic: {t_stat}")
-    print(f"p-value: {p_value}")
-    #print(f"Critical Values: {critical_values}")
-
-    # Interpret results
-    if p_value < 0.05:
-        print(f"{symbols[0]} and {symbols[1]} are cointegrated (p-value < 0.05).")
-        return True
-    else:
-        print(f"{symbols[0]} and {symbols[1]} are not cointegrated (p-value >= 0.05).")
-        return False
-
-#Augmented Dickey-Fuller (ADF) test on individual time series
-def adf_test(price_data, symbols):
-    print("\nADF Test Results:")
-    
-    #Test stationarity of the spread (linear combination of time series) 
-    spread = price_data[symbols[0]] - price_data[symbols[1]]
-    adf_stat, p_value, _, _, critical_values, _ = adfuller(spread) #adf test on spread
-    #print("\nADF Test for Spread:")
-    #print(f" ADF Statistic: {adf_stat}")
-    print(f"p-value: {p_value}")
-    #print(f" Critical Values: {critical_values}")
-    if p_value < 0.05:
-        print("The spread is stationary (p-value < 0.05).")
-        return True
-    else:
-        print("The spread is not stationary (p-value >= 0.05).")
-        return False
-
-def calculate_indicators(spread, window=20): 
-
-    #spread[]: adding new columns to Spreads dataframe (indicator information for each day along)
-    #Bollinger Bands - SMA and upper/lower bands. 
-    #1st param = numeric series (spread data of closing prices) and window param (period over which MA and STD calculated)
-    #Upper and Lower band updates begin on day 20 to allow enough data for the window
-    bollinger = BollingerBands(spread['Spread'], window=window) #20 day Bollinger Band.
-    spread['BB_upper'] = bollinger.bollinger_hband() #upper band 
-    spread['BB_lower'] = bollinger.bollinger_lband() #lower band
-
-    #RSI - Measuring speed + magnitude; oversold = below 30, overbought = above 70
-    #RSI calculations begin on day 14 for sufficient data for window 
-    spread['RSI'] = RSIIndicator(spread['Spread'], window=14).rsi() #14 day RSI
-
-    #Z-SCORE - measuring extreme deviations from the mean
-    #Current spread - rolling window mean of Spread. Divided by rolling window STD of Spread. 
-    spread['Z_Score'] = (spread['Spread'] - spread['Spread'].rolling(window).mean()) / spread['Spread'].rolling(window).std()
-
-    #returning Spread Dataframe with new columns
-    return spread
-
-def backtest_pairs(stock1, stock2, spread, initial_balance=10000):
-    capital = initial_balance
-    #keys = 'long' and 'short'; types of positions
-    #value: initial value for both keys, quantity of assets held in each position type. Updates as strategy executes trades
-    positions = {'long': 0, 'short': 0} #dictionary; total number of shares holding for PEP and KO
-    portfolio = [] 
-    returns = [] 
-
-    #loop through rows of spread (each daily timestamp). Calculations everyday to check buy/sell signals
-    #iloc = pd method to access rows/columns of DataFrame by integer-based index positons
-    for i in range(len(spread)):
-
-        #Buy Signal: Spread bellow BB Lower and RSI < 30 and no of long positions = 0
-        #Long positions = 0: buy signal is only triggered if no longs held currently, preventing strat from opening multiple long positons simulataneously; over-leveraging the portfolio
-        #Can't open up another long pos (buy) until current position is fully closed 
-        #Program assumes we can only have one set of long positions and sell positions
-        #Only one active pair of positions at a time. Avoiding overlapping trades  
-        #Assumes all capital allocated once we do buy signal (used all our capital when buy signal triggered)
-        #Z-Score < -2: Spread is quite below mean (more than 2 SD's below mean)
-        if spread['Spread'].iloc[i] < spread['BB_lower'].iloc[i] and spread['RSI'].iloc[i] < 30 and spread['Z_Score'].iloc[i] < -2 and positions['long'] == 0:
-            #stock.iloc[i] = current day close price of stock from dataframe
-            #how many shares we can go long and short on current day close price 
-            positions['long'] = capital / stock1.iloc[i] #how many of the first stock can we buy with available capital at current price (stock1.iloc[i]) e.g. 10 long positions is 10 shares of the stock bought
-            positions['short'] = capital / stock2.iloc[i] #how many of the second stock shorting
-            capital = 0 #assumes all available capital is fully allocated to long and short positions during each buy signal
-            
-        #Sell Signal: Spread above BB Upper and RSI > 70 and atleast 1 long position
-        #Long Position > 0: need atleast 1 long position to initiate sell signal to ensure strat has existing position to close or reduce when sell criteria is met 
-        #Sell signal closes current long and short positions before allowing new trades
-        #Sell the curent shares of stock 1 at current price (gain capital) and 'buying back' short position shares of stock 2 (subtracts from capital) 
-        #After closing positions, dict is reset. Ensures no active positions remian and capital fully liquidated for new trades
-        #Therefore sells long and buys back short when sell signal triggered, and resets the positions once it sells everything
-        #Z-Score > 2: Spread is quite above mean (more than 2 SD's above mean)
-        elif spread['Spread'].iloc[i] > spread['BB_upper'].iloc[i] and spread['RSI'].iloc[i] > 70 and spread['Z_Score'].iloc[i] > 2 and positions['long'] > 0:
-            capital = positions['long'] * stock1.iloc[i] - positions['short'] * stock2.iloc[i]
-            position = {'long': 0, 'short': 0} 
-
-        #Track portfolio value 
-        current_portfolio_value = capital + positions['long'] * stock1.iloc[i] - positions['short'] * stock2.iloc[i] 
-        portfolio.append(current_portfolio_value) #portfolio update appended everyday 
-        if portfolio[i - 1] != 0: #if this is past day 1
-            #Everyday returns 
-            #(today's portfolio value - yesterday portfolio value) / yesterdays portfolio value; % change between yesterday and today; daily return
-            returns.append( (current_portfolio_value - portfolio[i - 1]) / portfolio[i - 1])
-        else:
-            returns.append(0) #no returns if the previous day's portfolio is 0
-    
-    #daily portfolio value and daily returns
-    return portfolio, returns
-
-def calculate_metrics(portfolio, returns, initial_balance):
-    total_return = (portfolio[-1] - initial_balance) / initial_balance
-    sharpe_ratio = np.mean(returns) / np.std(returns) * np.sqrt(252)
-    max_drawdown = max(1 - (np.array(portfolio) / np.maximum.accumulate(portfolio)))
-    return { 
-        "Total Return": total_return, 
-        "Sharpe Ratio": sharpe_ratio, 
-        "Max Drawdown": max_drawdown, 
-        "Final Portfolio Value": portfolio[-1]
-    }
-
-
-# Main execution
-#Tickers and Backtest Range 
-symbols = ['PEP', 'KO'] #BofA and WFC
-start_date = '2000-12-26' #Backtest dates; long for bigger sample size for cointegration
-end_date = '2024-12-24' 
-
-price_data = fetch_data(symbols, start_date, end_date)
-if price_data is not None:
-    cointegrated = test_cointegration(price_data, symbols)
-    spread_stationarity = adf_test(price_data, symbols)
-
-    #Check if stocks are valid pair (adf stationarity and cointegration tests)
-    if cointegrated and spread_stationarity: 
-        print(f"\nThe symbols {symbols[0]} and {symbols[1]} are a valid pair for pairs trading.")
-
-        #Calculate Spread and Indicators 
-        spread = pd.DataFrame({'Spread': price_data['PEP'] - price_data['KO']}) #makes new dataframe for spread data
-        print(spread.tail()) #check spread is being created with last few rows 
-        spread = calculate_indicators(spread) #calculate indicators + signals on spread. Updated spread dataframe
-
-        #Subset data for strategy backtest; shorter time to exploit mean reversion
-        backtest_start_date = '2019-01-01'
-        backtest_spread = spread.loc[backtest_start_date:] #subset spread for backtest data (from updated backtest start date)
-        backtest_prices = price_data[backtest_start_date:] #only gets stock price data from the new backtest start date
-
-        #Run backtest
-        portfolio, returns = backtest_pairs(backtest_prices['PEP'], backtest_prices['KO'], backtest_spread)
-
-        #Calculate Metrics 
-        metrics = calculate_metrics(portfolio, returns, initial_balance=10000)
-        print("\nPerformance Metrics: ")
-        #Loop metrics dictionary (Key: Metric (e.g. Sharpe Ratio), Value)
-        for metric, value in metrics.items(): 
-            print(f"{metric}: {value:.2f}")
-
-        # Plot Spread with Bollinger Bands
-        plt.figure(figsize=(10, 6))
-        plt.plot(backtest_spread.index, backtest_spread['Spread'], label='Spread')
-        plt.plot(backtest_spread.index, backtest_spread['BB_upper'], label='BB Upper')
-        plt.plot(backtest_spread.index, backtest_spread['BB_lower'], label='BB Lower')
-        plt.fill_between(backtest_spread.index, backtest_spread['BB_upper'], backtest_spread['BB_lower'], color='gray', alpha=0.2, label='Bollinger Bands')
-        plt.title('Spread with Bollinger Bands')
-        plt.xlabel('Date')
-        plt.ylabel('Spread')
-        plt.legend()
-        plt.show()
-
-        #Individual Time Series PLot 
-        plt.figure(figsize=(10,5)) 
-        #x = timestamps 
-        #y = price plot
-        plt.plot(backtest_prices.index, backtest_prices['PEP'], label='PEP') #index = dates (timestamps) for rows in price_data
-        plt.plot(backtest_prices.index, backtest_prices['KO'], label='KO')
-        plt.title('Price Time Series of PEP and KO') 
-        plt.xlabel('Date') 
-        plt.ylabel('Price')
-        plt.legend()
-        plt.show() 
-
-        #Plot porfolio value
-        plt.figure(figsize=(10, 6))
-        plt.plot(backtest_spread.index, portfolio, label='Portfolio Value')
-        plt.title('Pairs Trading Portfolio Value')
-        plt.xlabel('Time')
-        plt.ylabel('Portfolio Value')
-        plt.legend()
-        plt.show() 
-
-    else: 
-        print(f"\nThe symbols {symbols[0]} and {symbols[1]} are not a valid pair for pairs trading.")
